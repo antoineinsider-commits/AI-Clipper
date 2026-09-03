@@ -18,14 +18,36 @@ def get_video(video_url: str, local_video_path: str, out_dir: str = "work") -> s
         raise ValueError("Either video_url or local_video_path must be provided.")
 
     out_template = os.path.join(out_dir, "source.%(ext)s")
-    cmd = [
+
+    base_cmd = [
         "yt-dlp",
         "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
         "--merge-output-format", "mp4",
         "-o", out_template,
-        video_url,
     ]
-    subprocess.run(cmd, check=True)
+
+    cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE", "").strip()
+    if cookies_file and os.path.exists(cookies_file):
+        base_cmd += ["--cookies", cookies_file]
+
+    # YouTube's bot-check often blocks the default "web" client on shared CI
+    # IP ranges. Try progressively less web-like clients before giving up.
+    client_attempts = ["android", "ios", "tv_embedded", "web"]
+    last_error = None
+    for client in client_attempts:
+        cmd = base_cmd + ["--extractor-args", f"youtube:player_client={client}", video_url]
+        result = subprocess.run(cmd)
+        if result.returncode == 0:
+            last_error = None
+            break
+        last_error = result.returncode
+
+    if last_error is not None:
+        raise RuntimeError(
+            "yt-dlp failed against all YouTube client fallbacks. "
+            "YouTube is likely blocking this runner's IP and requires cookies. "
+            "See README.md 'YouTube cookie auth' section for how to fix this."
+        )
 
     # Find whatever file yt-dlp produced.
     for f in os.listdir(out_dir):

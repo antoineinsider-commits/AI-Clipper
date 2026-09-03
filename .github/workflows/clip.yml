@@ -79,6 +79,13 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
+            - name: Write YouTube cookies (if provided)
+        if: ${{ secrets.YOUTUBE_COOKIES != '' }}
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          echo "$YOUTUBE_COOKIES" > cookies.txt
+
       - name: Run the clipping pipeline
         env:
           WHISPER_BIN: whisper.cpp/build/bin/whisper-cli
@@ -88,6 +95,7 @@ jobs:
           LOCAL_VIDEO_PATH: ${{ inputs.local_video_path }}
           GUIDELINES_FILE: ${{ inputs.guidelines_file }}
           NUM_CLIPS: ${{ inputs.num_clips }}
+          YOUTUBE_COOKIES_FILE: cookies.txt
         run: |
           python scripts/pipeline.py
 
