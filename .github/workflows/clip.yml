@@ -1,0 +1,101 @@
+name: AI Clipper
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: "URL of the video (YouTube/Twitch/etc). Leave blank if using a repo-hosted file."
+        required: false
+        default: ""
+      local_video_path:
+        description: "Path to a video file already in the repo (e.g. input/video.mp4). Leave blank if using video_url."
+        required: false
+        default: ""
+      guidelines_file:
+        description: "Path to guidelines text file in the repo"
+        required: false
+        default: "guidelines/example_guidelines.txt"
+      num_clips:
+        description: "Number of clips to produce"
+        required: false
+        default: "5"
+      whisper_model:
+        description: "tiny.en | base.en | small.en"
+        required: false
+        default: "base.en"
+
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system deps (ffmpeg, build tools)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg build-essential cmake git
+
+      - name: Cache whisper.cpp build + models
+        id: cache-whisper
+        uses: actions/cache@v4
+        with:
+          path: |
+            whisper.cpp
+          key: whispercpp-${{ runner.os }}-v1
+
+      - name: Build whisper.cpp
+        if: steps.cache-whisper.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git
+          cd whisper.cpp
+          cmake -B build
+          cmake --build build -j --config Release
+
+      - name: Download whisper model
+        run: |
+          bash whisper.cpp/models/download-ggml-model.sh ${{ inputs.whisper_model }}
+
+      - name: Cache local LLM model
+        id: cache-llm
+        uses: actions/cache@v4
+        with:
+          path: models/llm.gguf
+          key: llm-model-qwen2.5-3b-instruct-q4
+
+      - name: Download local LLM (Qwen2.5-3B-Instruct, quantized)
+        if: steps.cache-llm.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl -L -o models/llm.gguf \
+            "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Run the clipping pipeline
+        env:
+          WHISPER_BIN: whisper.cpp/build/bin/whisper-cli
+          WHISPER_MODEL_PATH: whisper.cpp/models/ggml-${{ inputs.whisper_model }}.bin
+          LLM_MODEL_PATH: models/llm.gguf
+          VIDEO_URL: ${{ inputs.video_url }}
+          LOCAL_VIDEO_PATH: ${{ inputs.local_video_path }}
+          GUIDELINES_FILE: ${{ inputs.guidelines_file }}
+          NUM_CLIPS: ${{ inputs.num_clips }}
+        run: |
+          python scripts/pipeline.py
+
+      - name: Upload clips + report
+        uses: actions/upload-artifact@v4
+        with:
+          name: clips
+          path: |
+            output/*.mp4
+            output/report.md
+            output/report.json
