@@ -28,6 +28,8 @@ jobs:
   clip:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      YOUTUBE_COOKIES_SECRET: ${{ secrets.YOUTUBE_COOKIES }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -80,11 +82,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Write YouTube cookies (if provided)
-        if: ${{ secrets.YOUTUBE_COOKIES != '' }}
-        env:
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        if: env.YOUTUBE_COOKIES_SECRET != ''
         run: |
-          echo "$YOUTUBE_COOKIES" > cookies.txt
+          echo "$YOUTUBE_COOKIES_SECRET" > cookies.txt
 
       - name: Run the clipping pipeline
         env:
