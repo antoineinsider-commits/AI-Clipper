@@ -30,17 +30,20 @@ def get_video(video_url: str, local_video_path: str, out_dir: str = "work") -> s
     if cookies_file and os.path.exists(cookies_file):
         base_cmd += ["--cookies", cookies_file]
 
-    # YouTube's bot-check often blocks the default "web" client on shared CI
-    # IP ranges. Try progressively less web-like clients before giving up.
     # android/ios clients don't support cookies at all, so when we have
     # cookies, prioritize clients that actually use them.
     if cookies_file and os.path.exists(cookies_file):
         client_attempts = ["web", "mweb", "tv"]
     else:
         client_attempts = ["android", "ios", "tv_embedded", "web"]
+
     last_error = None
     for client in client_attempts:
-        cmd = base_cmd + ["--extractor-args", f"youtube:player_client={client}", video_url]
+        cmd = base_cmd + [
+            "--extractor-args", f"youtube:player_client={client}",
+            "--remote-components", "ejs:github",
+            video_url,
+        ]
         result = subprocess.run(cmd)
         if result.returncode == 0:
             last_error = None
