@@ -20,7 +20,7 @@ def _get_model():
         # n_threads=0 lets llama.cpp auto-detect available CPU cores.
         _MODEL = Llama(
             model_path=model_path,
-            n_ctx=8192,
+            n_ctx=16384,
             n_threads=os.cpu_count() or 4,
             verbose=False,
         )
@@ -30,6 +30,20 @@ def _get_model():
 def ask(prompt: str, max_tokens: int = 1500, temperature: float = 0.4) -> str:
     """Send a prompt to the local LLM and return the raw text response."""
     model = _get_model()
+
+    # Safety net: if the prompt is too big for the context window even after
+    # upstream sampling, trim it from the middle (keep the start and end,
+    # which usually carry the most structurally important content) rather
+    # than crashing.
+    n_ctx = model.n_ctx()
+    tokens = model.tokenize(prompt.encode("utf-8"))
+    available = n_ctx - max_tokens - 32  # safety margin
+    if len(tokens) > available:
+        head_take = available // 2
+        tail_take = available - head_take
+        trimmed_tokens = tokens[:head_take] + tokens[-tail_take:]
+        prompt = model.detokenize(trimmed_tokens).decode("utf-8", errors="ignore")
+
     result = model(
         prompt,
         max_tokens=max_tokens,
