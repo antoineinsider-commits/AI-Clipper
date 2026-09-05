@@ -27,7 +27,7 @@ on:
 jobs:
   clip:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       YOUTUBE_COOKIES_SECRET: ${{ secrets.YOUTUBE_COOKIES }}
     steps:
