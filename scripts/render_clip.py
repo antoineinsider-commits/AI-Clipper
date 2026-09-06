@@ -1,4 +1,3 @@
-cat > scripts/render_clip.py << 'PYEOF'
 """
 Turns a (start, end, words) selection into a finished, downloadable,
 vertical, captioned .mp4: full-bleed crop to 9:16 (no wasted blurred
@@ -141,4 +140,3 @@ def render_clip(
     ]
     subprocess.run(cmd, check=True)
     return out_path
-PYEOF
