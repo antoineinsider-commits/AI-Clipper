@@ -1,11 +1,12 @@
+cat > scripts/render_clip.py << 'PYEOF'
 """
 Turns a (start, end, words) selection into a finished, downloadable,
-vertical, captioned .mp4 -- the "every feature an expertly clipped video
-will have" part: crop to 9:16, blurred-background padding if needed,
-loudness-normalized audio, and animated word-by-word captions burned in
-via an ASS subtitle file (karaoke-style highlight).
+vertical, captioned .mp4: full-bleed crop to 9:16 (no wasted blurred
+padding), loudness-normalized audio, and cleaned-up animated captions
+burned in via an ASS subtitle file.
 """
 import os
+import re
 import subprocess
 
 
@@ -24,6 +25,11 @@ Style: Caption,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
+# Contraction fragments whisper.cpp sometimes emits as their own "word"
+# (e.g. "World" then "'s" as a separate token). These get merged back onto
+# the previous word instead of showing as "WORLD 'S".
+_CONTRACTION_FRAGMENT = re.compile(r"^'[a-zA-Z]+$")
+
 
 def _ass_timestamp(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -32,13 +38,43 @@ def _ass_timestamp(seconds: float) -> str:
     return f"{h:d}:{m:02d}:{s:05.2f}"
 
 
-def build_ass_captions(words: list[dict], clip_start: float, clip_end: float, out_path: str):
+def clean_words(words: list) -> list:
     """
-    Builds karaoke-style captions: groups words into short on-screen lines
-    (~4-6 words) so captions read like modern short-form content, with each
-    line timed to when those words are actually spoken.
+    Cleans up raw whisper.cpp word tokens before they're shown as captions:
+    - merges contraction fragments ("'s", "'re", "'t"...) onto the prior word
+    - drops stray bare-dash tokens whisper sometimes emits for speaker turns
+    - strips a leading dash glued onto a word (e.g. "-Loving" -> "Loving")
     """
-    clip_words = [w for w in words if clip_start <= w["start"] < clip_end]
+    cleaned = []
+    for w in words:
+        text = w["word"].strip()
+        if not text:
+            continue
+
+        if cleaned and _CONTRACTION_FRAGMENT.match(text):
+            cleaned[-1]["word"] += text
+            cleaned[-1]["end"] = w["end"]
+            continue
+
+        if text in ("-", "--", "—"):
+            continue
+
+        if text.startswith(("-", "—")) and len(text) > 1:
+            text = text.lstrip("-—").strip()
+            if not text:
+                continue
+
+        cleaned.append({"word": text, "start": w["start"], "end": w["end"]})
+    return cleaned
+
+
+def build_ass_captions(words: list, clip_start: float, clip_end: float, out_path: str):
+    """
+    Builds karaoke-style captions: groups cleaned words into short on-screen
+    lines (~4-6 words) timed to when those words are actually spoken.
+    """
+    raw_clip_words = [w for w in words if clip_start <= w["start"] < clip_end]
+    clip_words = clean_words(raw_clip_words)
 
     lines = []
     group = []
@@ -67,7 +103,7 @@ def build_ass_captions(words: list[dict], clip_start: float, clip_end: float, ou
 
 def render_clip(
     source_video: str,
-    words: list[dict],
+    words: list,
     start_seconds: float,
     end_seconds: float,
     out_path: str,
@@ -80,31 +116,29 @@ def render_clip(
 
     duration = end_seconds - start_seconds
 
-    # Crop/scale to vertical: scale so height fills target, blur-pad the
-    # background, and center the sharp foreground crop on top -- avoids
-    # ugly hard crops when the source is 16:9.
+    # Full-bleed vertical crop: scale to COVER the target frame (no letterbox
+    # bars, no blurred padding), then center-crop any excess width/height.
+    # This fills the whole 9:16 frame with the subject, at the cost of
+    # cropping off some of the sides of a widescreen source.
     vf = (
-        f"[0:v]trim=start={start_seconds}:end={end_seconds},setpts=PTS-STARTPTS,"
-        f"split=2[bg][fg];"
-        f"[bg]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
-        f"crop={target_w}:{target_h},gblur=sigma=20[bgblur];"
-        f"[fg]scale={target_w}:-2:force_original_aspect_ratio=decrease[fgscaled];"
-        f"[bgblur][fgscaled]overlay=(W-w)/2:(H-h)/2,"
-        f"ass={ass_path}[outv]"
+        f"trim=start={start_seconds}:end={end_seconds},setpts=PTS-STARTPTS,"
+        f"scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+        f"crop={target_w}:{target_h},"
+        f"ass={ass_path}"
     )
     af = f"atrim=start={start_seconds}:end={end_seconds},asetpts=PTS-STARTPTS,loudnorm"
 
     cmd = [
         "ffmpeg", "-y",
         "-i", source_video,
-        "-filter_complex", vf,
-        "-map", "[outv]",
-        "-map", "0:a",
+        "-vf", vf,
         "-af", af,
         "-t", str(duration),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+        "-maxrate", "8M", "-bufsize", "16M",
         "-c:a", "aac", "-b:a", "192k",
         out_path,
     ]
     subprocess.run(cmd, check=True)
     return out_path
+PYEOF
